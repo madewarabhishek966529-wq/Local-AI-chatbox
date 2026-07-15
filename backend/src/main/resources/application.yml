@@ -1,0 +1,44 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: local-ai-chat-backend
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/local_ai_chat}
+
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 25MB
+
+  jackson:
+    default-property-inclusion: non_null
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:CHANGE_ME_this_is_a_dev_only_secret_replace_in_prod_env_var_JWT_SECRET_min_32_bytes}
+    access-token-expiration-ms: ${JWT_ACCESS_EXPIRATION_MS:900000}        # 15 minutes
+    refresh-token-expiration-ms: ${JWT_REFRESH_EXPIRATION_MS:1209600000}  # 14 days
+
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://10.0.2.2:*}
+
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    default-model: ${OLLAMA_DEFAULT_MODEL:llama3.1:8b}
+    available-models: ${OLLAMA_AVAILABLE_MODELS:llama3.1:8b,gemma3:9b,qwen3:8b}
+    request-timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
+
+  rate-limit:
+    requests-per-minute: ${RATE_LIMIT_RPM:60}
+
+logging:
+  level:
+    root: INFO
+    com.localai.chat: DEBUG
+    org.springframework.security: WARN
