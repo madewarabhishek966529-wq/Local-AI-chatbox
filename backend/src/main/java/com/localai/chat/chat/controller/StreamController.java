@@ -8,6 +8,8 @@ import com.localai.chat.chat.service.ChatService;
 import com.localai.chat.ollama.OllamaService;
 import com.localai.chat.ollama.dto.OllamaDtos.OllamaMessage;
 import com.localai.chat.security.AppUserPrincipal;
+import com.localai.chat.settings.UserSettings;
+import com.localai.chat.settings.UserSettingsRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +40,7 @@ public class StreamController {
 
     private final ChatService chatService;
     private final OllamaService ollamaService;
+    private final UserSettingsRepository userSettingsRepository;
 
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> stream(
@@ -55,7 +58,7 @@ public class StreamController {
 
         StringBuilder accumulated = new StringBuilder();
 
-        Flux<String> tokens = ollamaService.streamChat(context, conversation.getModelName(), defaultGenerationSettings())
+        Flux<String> tokens = ollamaService.streamChat(context, conversation.getModelName(), generationSettingsFor(userId))
                 .doOnNext(accumulated::append)
                 .doOnComplete(() -> {
                     if (!accumulated.isEmpty()) {
@@ -88,7 +91,14 @@ public class StreamController {
         return messages;
     }
 
-    private GenerationSettings defaultGenerationSettings() {
-        return new GenerationSettings(0.7, 0.9, 40, 2048);
+    private GenerationSettings generationSettingsFor(String userId) {
+        UserSettings settings = userSettingsRepository.findByUserId(userId)
+                .orElseGet(() -> UserSettings.builder().userId(userId).build());
+        return new GenerationSettings(
+                settings.getTemperature(),
+                settings.getTopP(),
+                settings.getTopK(),
+                settings.getMaxTokens()
+        );
     }
 }

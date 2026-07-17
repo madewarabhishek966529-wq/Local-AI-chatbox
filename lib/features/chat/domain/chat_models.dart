@@ -22,13 +22,15 @@ class ChatMessage {
   });
 
   ChatMessage copyWith({
+    String? id,
+    String? conversationId,
     String? content,
     MessageStatus? status,
     bool? favorite,
   }) {
     return ChatMessage(
-      id: id,
-      conversationId: conversationId,
+      id: id ?? this.id,
+      conversationId: conversationId ?? this.conversationId,
       role: role,
       content: content ?? this.content,
       createdAt: createdAt,
@@ -77,6 +79,7 @@ class Conversation {
   });
 
   Conversation copyWith({
+    String? id,
     String? title,
     DateTime? updatedAt,
     bool? pinned,
@@ -84,7 +87,7 @@ class Conversation {
     bool? favorite,
   }) {
     return Conversation(
-      id: id,
+      id: id ?? this.id,
       title: title ?? this.title,
       updatedAt: updatedAt ?? this.updatedAt,
       modelName: modelName,

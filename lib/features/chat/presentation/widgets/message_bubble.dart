@@ -2,10 +2,48 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
+import 'package:markdown/markdown.dart' as md;
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/local_signal.dart';
 import '../../domain/chat_models.dart';
 import 'typing_indicator.dart';
+
+/// Renders fenced ```lang code blocks with syntax highlighting via
+/// flutter_highlight instead of flutter_markdown's plain monospace text.
+/// Inline `code` spans are left alone (those come through as plain `code`
+/// elements with no language class and no newline, so we fall back to
+/// flutter_markdown's default rendering for them).
+class _HighlightedCodeBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final code = element.textContent;
+    final languageClass = element.attributes['class']; // e.g. "language-dart"
+    final isFencedBlock = languageClass != null || code.contains('\n');
+    if (!isFencedBlock) return null; // let flutter_markdown render inline code
+
+    final language = languageClass?.replaceFirst('language-', '');
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.codeBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.codeBorder),
+      ),
+      child: HighlightView(
+        code.replaceAll(RegExp(r'\n$'), ''),
+        language: language ?? 'plaintext',
+        theme: atomOneDarkTheme,
+        padding: EdgeInsets.zero,
+        textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.4),
+      ),
+    );
+  }
+}
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -115,6 +153,9 @@ class MessageBubble extends StatelessWidget {
                     : MarkdownBody(
                         data: message.content,
                         selectable: true,
+                        builders: {
+                          'code': _HighlightedCodeBuilder(),
+                        },
                         styleSheet: MarkdownStyleSheet(
                           p: const TextStyle(color: AppColors.textPrimary, fontSize: 15, height: 1.5),
                           code: TextStyle(

@@ -13,6 +13,12 @@ import '../domain/chat_models.dart';
 
 const _uuid = Uuid();
 
+/// Backend conversation ids are Mongo ObjectIds (24 hex chars, no dashes).
+/// Local-only ids are UUID v4 (36 chars, dash-separated). This lets us tell
+/// "created while offline, not yet synced" apart from "created online"
+/// without needing an extra flag threaded through Hive/state.
+bool _isLocalOnlyId(String id) => id.contains('-');
+
 final chatRepositoryProvider = Provider<ChatRepository>(
   (ref) => ChatRepository(ref.watch(dioClientProvider)),
 );
@@ -163,6 +169,17 @@ class ConversationListNotifier extends StateNotifier<List<Conversation>> {
         if (c.id == id) c.copyWith(updatedAt: DateTime.now()) else c,
     ];
   }
+
+  /// Replaces a local-only conversation's temp UUID with its canonical
+  /// backend id once it's been synced, in both state and the Hive cache.
+  Future<void> remapId(String localId, Conversation synced) async {
+    state = [
+      for (final c in state)
+        if (c.id == localId) synced else c,
+    ];
+    await HiveStorage.conversations.delete(localId);
+    await _cacheOne(synced);
+  }
 }
 
 final conversationListProvider =
@@ -176,7 +193,12 @@ final conversationListProvider =
 /// message IDs (needed for favorite/delete) are canonical, not local temp
 /// IDs.
 class ChatSessionNotifier extends StateNotifier<List<ChatMessage>> {
-  final String conversationId;
+  /// The conversation id this session currently talks to. Starts as
+  /// whatever id the widget was built with; if that id is a local-only
+  /// UUID (created while offline), `sendMessage` remaps it to the
+  /// canonical backend id the first time it manages to sync, so
+  /// subsequent calls in this session use the real id.
+  String conversationId;
   final ChatRepository repository;
   final Ref ref;
   StreamSubscription<String>? _subscription;
@@ -224,9 +246,52 @@ class ChatSessionNotifier extends StateNotifier<List<ChatMessage>> {
     super.dispose();
   }
 
+  /// If this session is still on a local-only id (created while offline)
+  /// and the backend is reachable, creates the real conversation on the
+  /// backend now and remaps everything — session id, conversation list
+  /// state, and the Hive caches for both conversations and messages — onto
+  /// the new canonical id. No-ops if already synced or still offline.
+  Future<void> _syncOfflineConversationIfNeeded() async {
+    if (!_isLocalOnlyId(conversationId)) return;
+
+    final localId = conversationId;
+    final listNotifier = ref.read(conversationListProvider.notifier);
+    final localMatches = ref
+        .read(conversationListProvider)
+        .where((c) => c.id == localId);
+    final local = localMatches.isEmpty ? null : localMatches.first;
+
+    try {
+      final synced = await repository.createConversation(
+        title: local?.title,
+        modelName: local?.modelName,
+      );
+
+      // 1. Conversation list: swap the local entry for the synced one.
+      await listNotifier.remapId(localId, synced);
+
+      // 2. Migrate this session's message cache to the new key and update
+      //    every already-sent message's conversationId in local state.
+      conversationId = synced.id;
+      state = [for (final m in state) m.copyWith(conversationId: synced.id)];
+      await HiveStorage.messages.delete(localId);
+      await _cache(state);
+
+      ref.read(backendReachabilityProvider.notifier).markReachable();
+    } on DioException catch (e) {
+      if (e.error is OfflineException) {
+        ref.read(backendReachabilityProvider.notifier).markUnreachable();
+      }
+      // Stay on the local id; sendMessage will fall back to the normal
+      // offline-failure handling below.
+    }
+  }
+
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
     final trimmed = content.trim();
+
+    await _syncOfflineConversationIfNeeded();
 
     final optimisticUser = ChatMessage(
       id: _uuid.v4(),
@@ -302,17 +367,77 @@ class ChatSessionNotifier extends StateNotifier<List<ChatMessage>> {
     ];
   }
 
-  /// Resends the last user message to produce a new reply. The current
-  /// backend contract always appends a fresh user turn on `/stream`, so
-  /// this creates a new user message rather than truly replacing the last
-  /// assistant reply in place — a dedicated `/regenerate` endpoint that
-  /// skips that would make this cleaner.
-  void regenerateLast() {
-    final lastUser = state.lastWhere(
-      (m) => m.role == MessageRole.user,
-      orElse: () => throw StateError('No user message to regenerate from'),
-    );
-    sendMessage(lastUser.content);
+  Future<void> toggleMessageFavorite(
+    String messageId,
+    bool currentValue,
+  ) async {
+    final newValue = !currentValue;
+    state = [
+      for (final m in state)
+        if (m.id == messageId) m.copyWith(favorite: newValue) else m,
+    ];
+    await _cache(state);
+    try {
+      await repository.setMessageFavorite(messageId, newValue);
+      ref.read(backendReachabilityProvider.notifier).markReachable();
+    } on DioException catch (e) {
+      if (e.error is OfflineException) {
+        ref.read(backendReachabilityProvider.notifier).markUnreachable();
+      }
+      // optimistic update stands; will reconcile on next _refreshFromBackend()
+    }
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    state = state.where((m) => m.id != messageId).toList();
+    await _cache(state);
+    try {
+      await repository.deleteMessage(messageId);
+      ref.read(backendReachabilityProvider.notifier).markReachable();
+    } on DioException catch (e) {
+      if (e.error is OfflineException) {
+        ref.read(backendReachabilityProvider.notifier).markUnreachable();
+      }
+    }
+  }
+
+  /// Regenerates the last assistant reply in place: removes both the last
+  /// assistant message and the user prompt that produced it (from the
+  /// backend and local state), then re-submits that same prompt via
+  /// `sendMessage`. This avoids the duplicate user/assistant turn that
+  /// resulted from simply calling `sendMessage` again on top of the
+  /// existing history.
+  Future<void> regenerateLast() async {
+    ChatMessage? lastAssistant;
+    ChatMessage? lastUser;
+    for (final m in state.reversed) {
+      if (lastAssistant == null && m.role == MessageRole.assistant) {
+        lastAssistant = m;
+        continue;
+      }
+      if (lastUser == null && m.role == MessageRole.user) {
+        lastUser = m;
+        break;
+      }
+    }
+    if (lastUser == null) return; // nothing to regenerate from
+
+    final toDelete = [lastUser, if (lastAssistant != null) lastAssistant];
+    for (final m in toDelete) {
+      try {
+        await repository.deleteMessage(m.id);
+      } catch (_) {
+        // If deletion fails (e.g. offline, or the message was only ever
+        // local), still drop it from local state below so we don't end up
+        // with a stale duplicate once sendMessage appends the new turn.
+      }
+    }
+
+    final deleteIds = toDelete.map((m) => m.id).toSet();
+    state = state.where((m) => !deleteIds.contains(m.id)).toList();
+    await _cache(state);
+
+    await sendMessage(lastUser.content);
   }
 }
 

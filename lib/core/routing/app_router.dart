@@ -11,10 +11,8 @@ import '../../features/settings/presentation/screens/settings_screen.dart';
 import '../../features/splash_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
-  final authNotifier = ref.watch(authProvider.notifier);
-
   return GoRouter(
-    initialLocation: '/chats',
+    initialLocation: '/splash',
     refreshListenable: _AuthListenable(ref),
     redirect: (context, state) {
       final status = ref.read(authProvider).status;
@@ -22,13 +20,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       final onAuthPages = loc == '/login' || loc == '/register' || loc == '/forgot-password';
 
       if (status == AuthStatus.unknown || status == AuthStatus.loading) {
-        return null; // splash / let current page render, no redirect yet
+        // Still bootstrapping: stay on splash, don't redirect away from it.
+        return loc == '/splash' ? null : '/splash';
       }
-      if (status == AuthStatus.unauthenticated && !onAuthPages) {
-        return '/login';
+      if (status == AuthStatus.unauthenticated) {
+        return onAuthPages ? null : '/login';
       }
-      if (status == AuthStatus.authenticated && onAuthPages) {
-        return '/chats';
+      if (status == AuthStatus.authenticated) {
+        return (onAuthPages || loc == '/splash') ? '/chats' : null;
       }
       return null;
     },

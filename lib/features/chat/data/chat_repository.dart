@@ -1,5 +1,6 @@
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/sse_client.dart';
+import '../../settings/domain/app_settings.dart';
 import '../domain/chat_models.dart';
 
 class ChatRepository {
@@ -9,20 +10,36 @@ class ChatRepository {
   ChatRepository(this._client);
 
   Future<List<Conversation>> listConversations({bool archived = false, String? search}) async {
-    final response = await _client.dio.get('/chat/conversations', queryParameters: {
-      'archived': archived,
-      if (search != null && search.isNotEmpty) 'search': search,
-      'size': 100,
-    });
+    final response = await _client.dio.get(
+      '/chat/conversations',
+      queryParameters: {
+        'archived': archived,
+        if (search != null && search.isNotEmpty) 'search': search,
+        'size': 100,
+      },
+    );
     final items = (response.data['items'] as List).cast<Map<String, dynamic>>();
     return items.map(Conversation.fromJson).toList();
   }
 
+  Future<AppSettings> getSettings() async {
+    final response = await _client.dio.get('/settings');
+    return AppSettings.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<AppSettings> updateSettings(AppSettings settings) async {
+    final response = await _client.dio.put('/settings', data: settings.toJson());
+    return AppSettings.fromJson(response.data as Map<String, dynamic>);
+  }
+
   Future<Conversation> createConversation({String? title, String? modelName}) async {
-    final response = await _client.dio.post('/chat/conversations', data: {
-      if (title != null) 'title': title,
-      if (modelName != null) 'modelName': modelName,
-    });
+    final response = await _client.dio.post(
+      '/chat/conversations',
+      data: {
+        if (title != null) 'title': title,
+        if (modelName != null) 'modelName': modelName,
+      },
+    );
     return Conversation.fromJson(response.data as Map<String, dynamic>);
   }
 
@@ -82,11 +99,11 @@ class ChatRepository {
         )
         .where((event) => event.event == 'token' || event.event == 'error')
         .map((event) {
-      if (event.event == 'error') {
-        throw Exception(event.data.isEmpty ? 'Generation failed' : event.data);
-      }
-      return event.data;
-    });
+          if (event.event == 'error') {
+            throw Exception(event.data.isEmpty ? 'Generation failed' : event.data);
+          }
+          return event.data;
+        });
   }
 
   Future<List<String>> listModels() async {

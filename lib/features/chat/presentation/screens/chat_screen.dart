@@ -80,6 +80,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       return MessageBubble(
                         message: message,
                         onRegenerate: notifier.regenerateLast,
+                        onFavorite: () => notifier.toggleMessageFavorite(message.id, message.favorite),
+                        onDelete: () => notifier.deleteMessage(message.id),
                       );
                     },
                   ),
