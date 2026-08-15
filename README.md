@@ -1,5 +1,4 @@
 # Local — Flutter client (Phase 3: wired to the backend)
-
 A fully offline AI chat app: this Flutter client, a Spring Boot backend, and
 Ollama running local models. No cloud AI APIs, no API keys, ever.
 
